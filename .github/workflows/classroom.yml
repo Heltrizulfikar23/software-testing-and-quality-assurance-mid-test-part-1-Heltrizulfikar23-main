@@ -1,0 +1,86 @@
+name: Autograding Tests
+
+on:
+  - push
+  - workflow_dispatch
+
+permissions:
+  checks: write
+  actions: read
+  contents: read
+
+jobs:
+  autograding:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Install Mocha JUnit Reporter
+        run: npm install mocha-junit-reporter --save-dev
+
+      - name: Run Mocha Tests
+        id: run-mocha-tests
+        continue-on-error: true
+        run: |
+          npm test -- --reporter mocha-junit-reporter --reporter-options mochaFile=mocha-test-results.xml
+          echo "Mocha test results saved to mocha-test-results.xml."
+
+      - name: Display Mocha Test Results
+        run: |
+          cat mocha-test-results.xml
+
+      - name: Run Jest Tests
+        id: run-jest-tests
+        continue-on-error: true
+        run: |
+          npm run test-jest -- --json --outputFile=jest-test-results.json
+          echo "Jest test results saved to jest-test-results.json."
+
+      - name: Install xmlstarlet
+        run: sudo apt-get install -y xmlstarlet
+
+      - name: Check if Mocha test results exist
+        run: |
+          if [ ! -f mocha-test-results.xml ]; then
+            echo "Mocha test results file does not exist."
+            exit 1
+          fi
+
+      - name: Parse Mocha Test Results
+        id: parse-mocha-results
+        run: |
+          total_mocha_tests=$(xmlstarlet sel -t -v 'count(//testcase)' mocha-test-results.xml)
+          passed_mocha_tests=$(xmlstarlet sel -t -v 'count(//testcase[not(failure)])' mocha-test-results.xml)
+          max_score=50
+          mocha_score=$((passed_mocha_tests * max_score / total_mocha_tests))
+          
+          echo "mocha_score=$mocha_score" >> $GITHUB_ENV
+          echo "mocha_summary=Mocha - Total tests: $total_mocha_tests\nPassed tests: $passed_mocha_tests\nScore: $mocha_score/$max_score" >> $GITHUB_ENV
+
+      - name: Parse Jest Test Results
+        id: parse-jest-results
+        run: |
+          total_jest_tests=$(jq '.numTotalTests' jest-test-results.json)
+          passed_jest_tests=$(jq '.numPassedTests' jest-test-results.json)
+          max_score=50
+          jest_score=$((passed_jest_tests * max_score / total_jest_tests))
+
+          echo "jest_score=$jest_score" >> $GITHUB_ENV
+          echo "jest_summary=Jest - Total tests: $total_jest_tests\nPassed tests: $passed_jest_tests\nScore: $jest_score/$max_score" >> $GITHUB_ENV
+
+      - name: Calculate Total Score and Summary
+        run: |
+          # Retrieve scores from environment variables
+          total_score=$((mocha_score + jest_score))
+          echo -e "🏆 Grand total score: $total_score/100\n"
+          echo -e "$mocha_summary\n$jest_summary\n🏆 Grand total score: $total_score/100\n"
